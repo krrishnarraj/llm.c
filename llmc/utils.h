@@ -16,9 +16,6 @@
 #ifndef _WIN32
 #include <dirent.h>
 #include <arpa/inet.h>
-#else
-#pragma comment(lib, "Ws2_32.lib")  // Link Ws2_32.lib for socket functions
-#include <winsock2.h>
 #endif
 
 // ----------------------------------------------------------------------------
@@ -210,6 +207,17 @@ extern inline int find_max_step(const char* output_log_dir) {
     }
     closedir(dir);
     return max_step;
+}
+
+extern inline int ends_with_bin(const char* str) {
+    // checks if str ends with ".bin". could be generalized in the future.
+    if (str == NULL) { return 0; }
+    size_t len = strlen(str);
+    const char* suffix = ".bin";
+    size_t suffix_len = strlen(suffix);
+    if (len < suffix_len) { return 0; }
+    int suffix_matches = strncmp(str + len - suffix_len, suffix, suffix_len) == 0;
+    return suffix_matches;
 }
 
 #endif
