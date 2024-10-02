@@ -56,6 +56,24 @@ It can be used to launch the subsequent run:
 
 ```bash
 MATMUL_TILE_SIZE=16 MATMUL_LOCAL_MEM_PADDING_SIZE=1 MATMUL_VLOAD_SIZE=8 MATMUL_DO_PRELOAD=1 MATMUL_USE_MAD=1 ./train_gpt2cl
+
+## quick start (1 GPU, fp32 only)
+
+If you won't be training on multiple nodes, aren't interested in mixed precision, and are interested in learning CUDA, the fp32 (legacy) files might be of interest to you. These are files that were "checkpointed" early in the history of llm.c and frozen in time. They are simpler, more portable, and possibly easier to understand. Run the 1 GPU, fp32 code like this:
+
+```bash
+chmod u+x ./dev/download_starter_pack.sh
+./dev/download_starter_pack.sh
+make train_gpt2fp32cu
+./train_gpt2fp32cu
+```
+
+The download_starter_pack.sh script is a quick & easy way to get started and it downloads a bunch of .bin files that help get you off the ground. These contain: 1) the GPT-2 124M model saved in fp32, in bfloat16, 2) a "debug state" used in unit testing (a small batch of data, and target activations and gradients), 3) the GPT-2 tokenizer, and 3) the tokenized [tinyshakespeare](https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt) dataset. Alternatively, instead of running the .sh script, you can re-create these artifacts manually as follows:
+
+```bash
+pip install -r requirements.txt
+python dev/data/tinyshakespeare.py
+python train_gpt2.py
 ```
 
 ## quick start (CPU)
@@ -165,6 +183,60 @@ sudo apt-get -y install libcudnn9-dev-cuda-12
 
 On top of this you need the [cuDNN frontend](https://github.com/NVIDIA/cudnn-frontend/tree/main), but this is just header files. Simply clone the repo to your disk. The Makefile currently looks for it in either your home directory or the current directory. If you have put it elsewhere, add `CUDNN_FRONTEND_PATH=/path/to/your/cudnn-frontend/include` to the `make` command-line.
 
+## multi-GPU training
+
+Make sure you install MPI and NCCL, e.g. on Linux:
+
+```bash
+sudo apt install openmpi-bin openmpi-doc libopenmpi-dev
+```
+
+For NCCL follow the instructions from the [official website](https://developer.nvidia.com/nccl/nccl-download) (e.g. network installer)
+
+and then:
+
+```bash
+make train_gpt2cu
+mpirun -np <number of GPUs> ./train_gpt2cu
+```
+
+or simply run one of our scripts under `./scripts/`.
+
+## multi-node training
+
+Make sure you've installed `NCCL` following instructions from [multi-GPU](#multi-gpu-training) section.
+
+There are 3 ways we currently support that allow you to run multi-node training:
+1) Use OpenMPI to exchange nccl id and initialize NCCL. See e.g. `./scripts/multi_node/run_gpt2_124M_mpi.sh` script for details.
+2) Use shared file system to init NCCL. See `./scripts/multi_node/run_gpt2_124M_fs.sbatch` script for details.
+3) Use TCP sockets to init NCCL. See `./scripts/multi_node/run_gpt2_124M_tcp.sbatch` script for details.
+
+Note:
+* If you're running in a slurm environment and your slurm doesn't support PMIx (which we assume will be a common situation given that `slurm-wlm` dropped PMIx support) you will have to use FS (2) or TCP (3) approach. To test whether your slurm supports PMIx run: `srun --mpi=list` and see whether you get `pmix` in the output.
+* If you don't have slurm set up, you can kick off a multi-node run using `mpirun` - MPI (1).
+
+None of these 3 methods is superior, we just offer you options so that you can run in your specific environment.
+
+## experiments / sweeps
+
+Just as an example process to sweep learning rates on a machine with 4 GPUs on TinyStories. Run a shell script `sweep.sh` (after you of course `chmod u+x sweep.sh`):
+
+```bash
+#!/bin/bash
+
+learning_rates=(3e-5 1e-4 3e-4 1e-3)
+
+for i in {0..3}; do
+    export CUDA_VISIBLE_DEVICES=$i
+    screen -dmS "tr$i" bash -c "./train_gpt2cu -i data/TinyStories -v 250 -s 250 -g 144 -l ${learning_rates[$i]} -o stories$i.log"
+done
+
+# you can bring these down with
+# screen -ls | grep -E "tr[0-3]" | cut -d. -f1 | xargs -I {} screen -X -S {} quit
+```
+
+This example opens up 4 screen sessions and runs the four commands with different LRs. This writes the log files `stories$i.log` with all the losses, which you can plot as you wish in Python. A quick example of how to parse and plot these logfiles is in [dev/vislog.ipynb](dev/vislog.ipynb).
+
 ## repo
 
 A few more words on what I want this repo to be:
@@ -188,10 +260,16 @@ Lastly, I will be a lot more sensitive to complexity in the root folder of the p
 
 - CUDA C++
   - [llm.cpp](https://github.com/gevtushenko/llm.c) by @[gevtushenko](https://github.com/gevtushenko): a port of this project using the [CUDA C++ Core Libraries](https://github.com/NVIDIA/cccl)
-     - A presentation this fork was covered in [this lecture](https://www.youtube.com/watch?v=WiB_3Csfj_Q) in the [CUDA MODE Discord Server](https://discord.gg/cudamode)
+     - A presentation this fork was covered in [this lecture](https://www.youtube.com/watch?v=WiB_3Csfj_Q) in the [GPU MODE Discord Server](https://discord.gg/cudamode)
+
+- C++/CUDA
+  - [llm.cpp](https://github.com/zhangpiu/llm.cpp/tree/master/llmcpp) by @[zhangpiu](https://github.com/zhangpiu): a port of this project using the [Eigen](https://gitlab.com/libeigen/eigen), supporting CPU/CUDA.
 
 - WebGPU C++
   - [gpu.cpp](https://github.com/AnswerDotAI/gpu.cpp) by @[austinvhuang](https://github.com/austinvhuang): a library for portable GPU compute in C++ using native WebGPU. Aims to be a general-purpose library, but also porting llm.c kernels to WGSL.
+  
+- C++
+  - [llm.cpp](https://github.com/GaoYusong/llm.cpp) by @[GaoYusong](https://github.com/GaoYusong): a port of this project featuring a C++ single-header [tinytorch.hpp](https://github.com/GaoYusong/llm.cpp/blob/main/tinytorch.hpp) library
 
 - Go
   - [llm.go](https://github.com/joshcarp/llm.go) by @[joshcarp](https://github.com/joshcarp): a Go port of this project
